@@ -1,3 +1,4 @@
 eyrie-rt
 .options_log
 *.o
+*.su
