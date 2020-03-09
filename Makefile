@@ -5,11 +5,12 @@ endif
 CC = riscv64-unknown-linux-gnu-gcc
 OBJCOPY = riscv64-unknown-linux-gnu-objcopy
 CFLAGS = -Wall -Werror -fPIC -fno-builtin -O0 -fstack-usage -std=c11 -g $(OPTIONS_FLAGS)
-SRCS = aes.c sha256.c boot.c interrupt.c printf.c syscall.c string.c linux_wrap.c io_wrap.c rt_util.c mm.c env.c freemem.c paging.c
+SRCS = aes.c sha256.c boot.c interrupt.c printf.c syscall.c string.c linux_wrap.c io_wrap.c rt_util.c mm.c env.c freemem.c paging.c merkle.c
 ASM_SRCS = entry.S
 RUNTIME = eyrie-rt
 LINK = riscv64-unknown-linux-gnu-ld
-LDFLAGS = -static -nostdlib
+LIBGCC_PATH = $(shell $(CC) --print-libgcc-file-name)
+LDFLAGS = -static -nostdlib -L$(shell dirname $(LIBGCC_PATH)) -lgcc
 
 SDK_LIB_DIR = $(KEYSTONE_SDK_DIR)/lib
 SDK_INCLUDE_EDGE_DIR = $(SDK_LIB_DIR)/edge/include
@@ -43,7 +44,7 @@ copy: $(RUNTIME) $(DISK_IMAGE)
 	rm -rf $(MOUNT_DIR)
 
 $(RUNTIME): $(ASM_OBJS) $(OBJS) $(SDK_EDGE_LIB) $(TMPLIB)
-	$(LINK) $(LINKFLAGS) -o $@ $^ -T runtime.lds
+	$(LINK) -o $@ $^ -T runtime.lds $(LDFLAGS)
 	$(OBJCOPY) --add-section .options_log=.options_log --set-section-flags .options_log=noload,readonly $(RUNTIME)
 
 $(ASM_OBJS): $(ASM_SRCS)
