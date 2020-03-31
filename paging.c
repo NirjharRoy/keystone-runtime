@@ -34,7 +34,7 @@ void paging_dec_user_page(void)
   assert(paging_user_page_count >= 0);
 }
 
-uintptr_t __alloc_backing_page()
+uintptr_t paging_alloc_backing_page()
 {
   uintptr_t offs_update = (paging_next_backing_page_offset + paging_inc_backing_page_offset_by) % paging_backing_storage_size;
 
@@ -253,7 +253,7 @@ static uint64_t *pageout_ctr_ptr(uintptr_t page)
   assert(indirect_idx < NUM_CTR_INDIRECTS);
 
   if (!ctr_indirect_ptrs[indirect_idx]) {
-    ctr_indirect_ptrs[indirect_idx] = __alloc_backing_page();
+    ctr_indirect_ptrs[indirect_idx] = paging_alloc_backing_page();
     // Fill ptr pages with random values so our counters start unpredictable
     rt_util_getrandom((void *)ctr_indirect_ptrs[indirect_idx], RISCV_PAGE_SIZE);
   }
@@ -286,9 +286,6 @@ static void dec_buf(const void *addr, void *dst, size_t len, uint64_t pageout_ct
     
     aes_decrypt_ctr((uint8_t *)addr, len, (uint8_t *)dst, key_sched, 256, iv);
 }
-
-void *malloc(size_t size) { return NULL; }
-void free(void *ptr) {}
 
 /* evict a page from EPM and store it to the backing storage
  * back_page (PA1) <-- epm_page (PA2) <-- swap_page (PA1)
@@ -372,7 +369,7 @@ uintptr_t paging_evict_and_free_one(uintptr_t swap_va)
   if(swap_va)
     dest_va = swap_va;
   else
-    dest_va = __alloc_backing_page();
+    dest_va = paging_alloc_backing_page();
 
   assert(dest_va >= paging_backing_storage_addr);
   assert(dest_va < paging_backing_storage_addr +

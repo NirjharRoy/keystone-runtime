@@ -1,3 +1,5 @@
+#if defined(USE_FREEMEM) && defined(USE_PAGING)
+
 #include "merkle.h"
 
 #include <malloc.h>
@@ -25,7 +27,7 @@ _Static_assert(sizeof(merkle_page_freelist_t) <= sizeof(merkle_node_t),
 
 static merkle_page_freelist_t *merk_alloc_page(void)
 {
-    void *page = (void *)__alloc_backing_page();
+    void *page = (void *)paging_alloc_backing_page();
     merkle_page_freelist_t *free_list = (merkle_page_freelist_t *)page;
     memset(free_list, 0, sizeof(*free_list));
 
@@ -168,12 +170,13 @@ bool merk_verify(volatile merkle_node_t *root, uintptr_t key, uint8_t hash[32])
     }
 }
 
+
+#define MERK_MAX_DEPTH 32
+static merkle_node_t **intermediate_nodes[MERK_MAX_DEPTH] = {};
+
 void merk_insert(merkle_node_t *root, uintptr_t key, uint8_t hash[32])
 {
-#define MERK_MAX_DEPTH 20
     SHA256_CTX hasher;
-
-    merkle_node_t **intermediate_nodes[MERK_MAX_DEPTH] = {};
 
     merkle_node_t *node = merk_alloc_node();
     *node = (merkle_node_t) {
@@ -185,6 +188,11 @@ void merk_insert(merkle_node_t *root, uintptr_t key, uint8_t hash[32])
     memcpy(lowest_hash, hash, 32);
     memcpy(node->hash, lowest_hash, 32);
 
+    // The root never contains data, only a single pointer to the start
+    // of data on its right side.
+    // This is to better ensure a total split between the root and other
+    // nodes, as the root is merely a "guardian" which must reside in secure
+    // memory while others don't need to.
     if (!root->right) {
         root->right = node;
         return;
@@ -194,12 +202,18 @@ void merk_insert(merkle_node_t *root, uintptr_t key, uint8_t hash[32])
     int i;
 
     for (i = 1; i < MERK_MAX_DEPTH; i++) {
+        // Walk down the BST to find an appropriate location to store our new node.
+        // Races here don't matter so much as they will corrupt the tree, and the user
+        // will be alerted when attempting to locate a node.
+
         merkle_node_t *parent = *intermediate_nodes[i - 1];
         
         if (!parent->left && !parent->right) {
             merkle_node_t *sibling = parent;
 
-            // parent is a child node
+            // We've traversed down to a child node, so break it off into a leaf and insert
+            // a new parent node in its place.
+
             if (node->ptr < sibling->ptr) {
                 *intermediate_nodes[i - 1] = parent = merk_alloc_node();
 
@@ -217,12 +231,15 @@ void merk_insert(merkle_node_t *root, uintptr_t key, uint8_t hash[32])
                     .right = node,
                 };
             } else {
+                // We've specified a key that already exists, so overwrite the old node.
                 i--;
                 *intermediate_nodes[i] = node;
                 merk_free_node(sibling);
             }
             break;
         }
+
+        // Traverse the BST
 
         if (node->ptr < parent->ptr) {
             if (!parent->left) {
@@ -241,14 +258,33 @@ void merk_insert(merkle_node_t *root, uintptr_t key, uint8_t hash[32])
         }
     }
 
-    assert(i != MERK_MAX_DEPTH);
+    if (i == MERK_MAX_DEPTH) {
+        printf("Inserted to merkle tree with problematic key insertion order! "
+               "This has led to an unbalanced tree exceeding the depth capacity of %d. "
+               "Aborting!", MERK_MAX_DEPTH);
+        assert(false);
+    }
 
     for (i = i - 1; i >= 0; i--) {
+        // Here we walk back up the tree to percolate up our new hashes.
+        // We keep the previous iteration's hash, as well as the current iteration's merkle node,
+        // in secure memory to avoid any race conditions after writing to DRAM in the last step.
+        //
+        // We otherwise aren't concerned that an attacker will modify any data
+        // in the tree during this stage, as doing so will compromise the integrity
+        // of the tree such that the user will be alerted upon attempting any accesses
+        // to the compromised location.
+        //
+        // We also mark accesses to parent_ptr as volatile to ensure they get written and read
+        // with the correct access pattern.
+
         sha256_init(&hasher);
         merkle_node_t *parent_ptr = *intermediate_nodes[i];
-        merkle_node_t parent = *parent_ptr;
-        assert(!memcmp(lowest_hash, node->hash, 32));
+        merkle_node_t parent = *(volatile merkle_node_t *)parent_ptr;
+        assert(!memcmp(lowest_hash, node->hash, 32)); // TODO: this sanity checking can probably go away
 
+        // Check which child we are, and compute the parent's hash with our pre-stored `lowest_hash`
+        // and the hash of our sibling, if it exists.
         if (node == parent.left) {
             sha256_update(&hasher, lowest_hash, 32);
             if (parent.right)
@@ -262,8 +298,11 @@ void merk_insert(merkle_node_t *root, uintptr_t key, uint8_t hash[32])
 
         sha256_final(&hasher, lowest_hash);
         memcpy(parent.hash, lowest_hash, 32);
-        *parent_ptr = parent;
+
+        // Writeback
+        *(volatile merkle_node_t *)parent_ptr = parent;
         node = parent_ptr;
     }
 }
 
+#endif
