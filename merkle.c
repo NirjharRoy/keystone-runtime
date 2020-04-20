@@ -1,4 +1,4 @@
-#if defined(USE_FREEMEM) && defined(USE_PAGING)
+#if defined(USE_PAGE_HASH)
 
 #include "merkle.h"
 

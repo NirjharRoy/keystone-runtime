@@ -1,3 +1,5 @@
+#ifdef USE_PAGE_CRYPTO
+
 /*********************************************************************
 * Filename:   aes.c
 * Author:     Brad Conte (brad AT bradconte.com)
@@ -905,3 +907,5 @@ void print_rnd_key(WORD key[])
 	printf("\n");
 }
 */
+
+#endif //USE_PAGE_CRYPTO

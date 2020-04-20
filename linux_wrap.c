@@ -1,4 +1,5 @@
 #ifdef LINUX_SYSCALL_WRAPPING
+#define _GNU_SOURCE
 #include "uaccess.h"
 #include "linux_wrap.h"
 #include "syscall.h"
@@ -14,7 +15,7 @@
 uintptr_t linux_clock_gettime(__clockid_t clock, struct timespec *tp){
   print_strace("[runtime] clock_gettime not fully supported (clock %x, assuming)\r\n", clock);
   unsigned long cycles;
-  asm volatile ("rdcycle %0" : "=r" (cycles));
+  __asm__ volatile ("rdcycle %0" : "=r" (cycles));
 
   unsigned long sec = cycles / CLOCK_FREQ;
   unsigned long nsec = (cycles % CLOCK_FREQ);

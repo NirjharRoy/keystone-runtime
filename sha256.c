@@ -1,3 +1,5 @@
+#ifdef USE_PAGE_HASH
+
 /*********************************************************************
 * Filename:   sha256.c
 * Author:     Brad Conte (brad AT bradconte.com)
@@ -156,3 +158,5 @@ void sha256_final(SHA256_CTX *ctx, BYTE hash[])
 		hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
 	}
 }
+
+#endif // USE_PAGE_HASH
