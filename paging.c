@@ -16,6 +16,7 @@ uintptr_t paging_backing_storage_size;
 uintptr_t paging_next_backing_page_offset;
 uintptr_t paging_inc_backing_page_offset_by;
 
+static uintptr_t paging_alloced_count = 0;
 static uintptr_t paging_user_page_count = 0;
 
 #define NUM_CTR_INDIRECTS 24
@@ -49,13 +50,14 @@ uintptr_t paging_alloc_backing_page()
   assert(IS_ALIGNED(next_page, RISCV_PAGE_BITS));
 
   paging_next_backing_page_offset = offs_update;
+  paging_alloced_count += 1;
   return next_page;
 }
 
 unsigned int
 paging_remaining_pages()
 {
-  return (paging_backing_storage_size - paging_next_backing_page_offset)/RISCV_PAGE_SIZE;
+  return paging_backing_storage_size/RISCV_PAGE_SIZE - paging_alloced_count;
 }
 
 uintptr_t gcd(uintptr_t a, uintptr_t b)
@@ -439,8 +441,14 @@ void paging_handle_page_fault(struct encl_ctx* ctx)
   if (!back_ptr)
     goto exit;
 
-  assert(back_ptr >= paging_backing_storage_addr);
-  assert(back_ptr < paging_backing_storage_addr + paging_backing_storage_size);
+  if ((back_ptr < paging_backing_storage_addr)
+          || (back_ptr >= paging_backing_storage_addr + paging_backing_storage_size)) {
+      
+      warn("Page fault at badaddr:0x%X out of bounds for backing region. "
+           "back_ptr:0x%X, backing_base:0x%X, backing_size:0x%X\n",
+              addr, back_ptr, paging_backing_storage_addr, paging_backing_storage_size);
+      goto exit;
+  }
 
   /* evict & swap */
   frame = paging_evict_and_free_one(back_ptr);
