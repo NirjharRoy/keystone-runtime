@@ -282,7 +282,7 @@ static void decrypt_page(const void *addr, void *dst, uint64_t pageout_ctr)
 #endif
 }
 
-static void hash_page(uint8_t *hash, void *page_addr, uint64_t pageout_ctr)
+static void hash_page(uint8_t *hash, void *page_addr, uint64_t pageout_ctr, uint32_t backing_idx)
 {
 #ifdef USE_PAGE_HASH
   SHA256_CTX hasher;
@@ -290,6 +290,7 @@ static void hash_page(uint8_t *hash, void *page_addr, uint64_t pageout_ctr)
   sha256_init(&hasher);
   sha256_update(&hasher, page_addr, RISCV_PAGE_SIZE);
   sha256_update(&hasher, (uint8_t *)&pageout_ctr, sizeof(pageout_ctr));
+  sha256_update(&hasher, (uint8_t *)&backing_idx, sizeof(pageout_ctr));
   sha256_final(&hasher, hash);
 #endif
 }
@@ -327,7 +328,7 @@ void __swap_epm_page(uintptr_t back_page, uintptr_t epm_page, uintptr_t swap_pag
   uint64_t new_pageout_ctr = old_pageout_ctr + 1;
 
   uint8_t new_hash[32];
-  hash_page(new_hash, (void *)epm_page, new_pageout_ctr);
+  hash_page(new_hash, (void *)epm_page, new_pageout_ctr, back_idx);
   encrypt_page((void *)epm_page, (void *)back_page, new_pageout_ctr);
 
 #ifdef USE_PAGE_HASH
@@ -337,7 +338,7 @@ void __swap_epm_page(uintptr_t back_page, uintptr_t epm_page, uintptr_t swap_pag
   if (swap_page) {
     uint8_t old_hash[32];
     decrypt_page((void *)buffer, (void *)epm_page, old_pageout_ctr);
-    hash_page(old_hash, (void *)epm_page, old_pageout_ctr);
+    hash_page(old_hash, (void *)epm_page, old_pageout_ctr, back_idx);
 
 #ifdef USE_PAGE_HASH
     bool ok = merk_verify(&paging_merk_root, merk_key, old_hash);
