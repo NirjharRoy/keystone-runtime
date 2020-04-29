@@ -14,12 +14,10 @@
 uintptr_t paging_backing_storage_addr;
 uintptr_t paging_backing_storage_size;
 uintptr_t paging_next_backing_page_offset;
-uintptr_t paging_inc_backing_page_offset_by;
 
-static uintptr_t paging_alloced_count = 0;
 static uintptr_t paging_user_page_count = 0;
 
-#define NUM_CTR_INDIRECTS 24
+#define NUM_CTR_INDIRECTS 128
 static uintptr_t ctr_indirect_ptrs[NUM_CTR_INDIRECTS];
 
 extern uintptr_t rt_trap_table;
@@ -37,46 +35,26 @@ void paging_dec_user_page(void)
 
 uintptr_t paging_alloc_backing_page()
 {
-  uintptr_t offs_update = (paging_next_backing_page_offset + paging_inc_backing_page_offset_by) % paging_backing_storage_size;
+  uintptr_t next_page;
 
   /* no backing page available */
-  if (offs_update == 0) {
-    // cycled through all the pages
+  if (paging_next_backing_page_offset >= paging_backing_storage_size) {
     warn("no backing page avaiable");
     return 0;
   }
 
-  uintptr_t next_page = paging_backing_storage_addr + paging_next_backing_page_offset;
+  next_page = paging_backing_storage_addr + paging_next_backing_page_offset;
   assert(IS_ALIGNED(next_page, RISCV_PAGE_BITS));
 
-  paging_next_backing_page_offset = offs_update;
-  paging_alloced_count += 1;
+  paging_next_backing_page_offset += RISCV_PAGE_SIZE;
+
   return next_page;
 }
 
 unsigned int
 paging_remaining_pages()
 {
-  return paging_backing_storage_size/RISCV_PAGE_SIZE - paging_alloced_count;
-}
-
-uintptr_t gcd(uintptr_t a, uintptr_t b)
-{
-  while (b) {
-    uintptr_t tmp = b;
-    b = a % b;
-    a = tmp;
-  }
-  return a;
-}
-
-uintptr_t find_coprime_of(uintptr_t n)
-{
-  uintptr_t res;
-  do {
-    res = n / 2 + sbi_random() % (n / 2);
-  } while (gcd(res, n) != 1);
-  return res;
+  return (paging_backing_storage_size - paging_next_backing_page_offset)/RISCV_PAGE_SIZE;
 }
 
 void init_paging(uintptr_t user_pa_start, uintptr_t user_pa_end)
@@ -104,13 +82,6 @@ void init_paging(uintptr_t user_pa_start, uintptr_t user_pa_end)
   paging_pa_start = addr;
   paging_backing_storage_size = size;
   paging_backing_storage_addr = __paging_va(addr);
-
-  uintptr_t backing_pages = paging_backing_storage_size / RISCV_PAGE_SIZE;
-  uintptr_t inc = find_coprime_of(backing_pages);
-
-  paging_inc_backing_page_offset_by = inc * RISCV_PAGE_SIZE;
-  warn("num_pages = %zx, pagesize_inc = %zx", backing_pages, inc);
-
   paging_next_backing_page_offset = 0;
 
   debug("BACK: 0x%lx-0x%lx (%u KB), va 0x%lx", addr, addr + size, size/1024, paging_backing_storage_addr);
@@ -323,6 +294,16 @@ static void hash_page(uint8_t *hash, void *page_addr, uint64_t pageout_ctr)
 #endif
 }
 
+#ifdef USE_PAGE_HASH
+static uint32_t scramble_uint32(uint32_t val)
+{
+    // This function is a little magical. This value was determined experimentally, and
+    // yielded BST depths close to random insertion when applied to a series of sequentially
+    // increasing values, where this function's outputs were individually inserted to a BST.
+    return 0xc5810ce5 * val;
+}
+#endif
+
 /* evict a page from EPM and store it to the backing storage
  * back_page (PA1) <-- epm_page (PA2) <-- swap_page (PA1)
  * if swap_page is 0, no need to write epm_page
@@ -331,8 +312,9 @@ void __swap_epm_page(uintptr_t back_page, uintptr_t epm_page, uintptr_t swap_pag
 {
   assert(epm_page >= EYRIE_LOAD_START);
   assert(epm_page < freemem_va_start + freemem_size);
-  assert(back_page >= paging_backing_storage_addr);
-  assert(back_page < paging_backing_storage_addr + paging_backing_storage_size);
+  uintptr_t back_offs = back_page - paging_backing_storage_addr;
+  assert(back_offs < paging_backing_storage_size);
+  uint32_t back_idx = back_offs / RISCV_PAGE_SIZE;
 
   char buffer[RISCV_PAGE_SIZE] = {0,};
   if (swap_page) {
@@ -348,19 +330,23 @@ void __swap_epm_page(uintptr_t back_page, uintptr_t epm_page, uintptr_t swap_pag
   hash_page(new_hash, (void *)epm_page, new_pageout_ctr);
   encrypt_page((void *)epm_page, (void *)back_page, new_pageout_ctr);
 
+#ifdef USE_PAGE_HASH
+  uint32_t merk_key = scramble_uint32(back_idx);
+#endif
+
   if (swap_page) {
     uint8_t old_hash[32];
     decrypt_page((void *)buffer, (void *)epm_page, old_pageout_ctr);
     hash_page(old_hash, (void *)epm_page, old_pageout_ctr);
 
 #ifdef USE_PAGE_HASH
-    bool ok = merk_verify(&paging_merk_root, back_page, old_hash);
+    bool ok = merk_verify(&paging_merk_root, merk_key, old_hash);
     assert(ok);
 #endif
   }
 
 #ifdef USE_PAGE_HASH
-  merk_insert(&paging_merk_root, back_page, new_hash);
+  merk_insert(&paging_merk_root, merk_key, new_hash);
 #endif
 
   *pageout_ctr = new_pageout_ctr;
